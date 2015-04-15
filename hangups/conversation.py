@@ -21,6 +21,7 @@ class Conversation(object):
         self._conversation = client_conversation  # ClientConversation
         self._events = []  # [ConversationEvent]
         self._events_dict = {}  # {event_id: ConversationEvent}
+        self._send_message_lock = asyncio.Lock()
         for event_ in client_events:
             self.add_event(event_)
 
@@ -89,26 +90,43 @@ class Conversation(object):
         return self._user_list.get_user(user_id)
 
     @asyncio.coroutine
-    def send_message(self, segments, imageID=None):
+    def send_message(self, segments, image_file=None, image_id=None):
         """Send a message to this conversation.
 
-        segments must be a list of ChatMessageSegments to include in the
-        message.
+        A per-conversation lock is acquired to ensure that messages are sent in
+        the correct order when this method is called multiple times
+        asynchronously.
+
+        segments is a list of ChatMessageSegments to include in the message.
+
+        image_file is an optional file-like object containing an image to be
+        attached to the message.
+
+        image_id is an optional ID of an image to be attached to the message
+        (if you specify both image_file and image_id together, image_file
+        takes precedence and supplied image_id will be ignored)
 
         Raises hangups.NetworkError if the message can not be sent.
         """
-        # Send messages with OTR status matching the conversation's status.
-        otr_status = (schemas.OffTheRecordStatus.OFF_THE_RECORD
-                      if self.is_off_the_record
-                      else schemas.OffTheRecordStatus.ON_THE_RECORD)
-        try:
-            yield from self._client.sendchatmessage(
-                self.id_, [seg.serialize() for seg in segments], imageID = imageID,
-                otr_status=otr_status
-            )
-        except exceptions.NetworkError as e:
-            logger.warning('Failed to send message: {}'.format(e))
-            raise
+        with (yield from self._send_message_lock):
+            # Send messages with OTR status matching the conversation's status.
+            otr_status = (schemas.OffTheRecordStatus.OFF_THE_RECORD
+                          if self.is_off_the_record
+                          else schemas.OffTheRecordStatus.ON_THE_RECORD)
+            if image_file:
+                try:
+                    image_id = yield from self._client.upload_image(image_file)
+                except exceptions.NetworkError as e:
+                    logger.warning('Failed to upload image: {}'.format(e))
+                    raise
+            try:
+                yield from self._client.sendchatmessage(
+                    self.id_, [seg.serialize() for seg in segments],
+                    image_id=image_id, otr_status=otr_status
+                )
+            except exceptions.NetworkError as e:
+                logger.warning('Failed to send message: {}'.format(e))
+                raise
 
     @asyncio.coroutine
     def leave(self):
