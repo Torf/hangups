@@ -121,7 +121,7 @@ class Conversation(object):
                     raise
             try:
                 yield from self._client.sendchatmessage(
-                    self.id_, [seg.serialize() for seg in segments],
+                    self.id_, [seg.serialize() for seg in segments] if segments else None,
                     image_id=image_id, otr_status=otr_status
                 )
             except exceptions.NetworkError as e:
