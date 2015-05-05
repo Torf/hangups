@@ -467,8 +467,11 @@ class Client(object):
                     }]
                 }
             }))
-        upload_url = (json.loads(res1.body.decode())['sessionStatus']
-                      ['externalFieldTransfers'][0]['putInfo']['url'])
+        try:
+            upload_url = (json.loads(res1.body.decode())['sessionStatus']
+                          ['externalFieldTransfers'][0]['putInfo']['url'])
+        except KeyError:
+            raise KeyError(res1.body.decode())
 
         # Upload image data and get image ID
         res2 = yield from self._base_request(
