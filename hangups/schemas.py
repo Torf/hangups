@@ -104,7 +104,7 @@ class ClientHangoutEventType(enum.Enum):
     ONGOING_HANGOUT = 6
 
 
-class ClientOffTheRecordStatus(enum.Enum):
+class OffTheRecordStatus(enum.Enum):
 
     """Off-the-record status."""
 
@@ -204,7 +204,7 @@ CLIENT_CONVERSATION = Message(
         )
     )),
     (None, Field()),
-    (None, Field()),
+    ('otr_status', EnumField(OffTheRecordStatus)),
     (None, Field()),
     (None, Field()),
     ('current_participant', RepeatedField(USER_ID)),
@@ -275,8 +275,8 @@ CLIENT_HANGOUT_EVENT = Message(
 )
 
 CLIENT_OTR_MODIFICATION = Message(
-    ('old_otr_status', EnumField(ClientOffTheRecordStatus)),
-    ('new_otr_status', EnumField(ClientOffTheRecordStatus)),
+    ('old_otr_status', EnumField(OffTheRecordStatus)),
+    ('new_otr_status', EnumField(OffTheRecordStatus)),
     ('old_otr_toggle', EnumField(ClientOffTheRecordToggle)),
     ('new_otr_toggle', EnumField(ClientOffTheRecordToggle)),
     is_optional=True,
@@ -311,7 +311,7 @@ CLIENT_EVENT = Message(
     ('advances_sort_timestamp', Field(is_optional=True)),
     ('otr_modification', CLIENT_OTR_MODIFICATION),
     (None, Field(is_optional=True)),  # 0, 1 or None? related to notifications?
-    ('event_otr', EnumField(ClientOffTheRecordStatus)),
+    ('event_otr', EnumField(OffTheRecordStatus)),
     (None, Field()),  # always 1? (advances_sort_timestamp?)
 )
 
@@ -445,4 +445,10 @@ CLIENT_GET_CONVERSATION_RESPONSE = Message(
     (None, Field()),  # 'cgcrp'
     ('response_header', CLIENT_RESPONSE_HEADER),
     ('conversation_state', CLIENT_CONVERSATION_STATE),
+)
+
+CLIENT_GET_ENTITY_BY_ID_RESPONSE = Message(
+    (None, Field()),  # 'cgebirp'
+    ('response_header', CLIENT_RESPONSE_HEADER),
+    ('entities', RepeatedField(CLIENT_ENTITY)),
 )

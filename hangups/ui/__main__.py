@@ -77,6 +77,7 @@ class ChatUI(object):
         finally:
             # Ensure urwid cleans up properly and doesn't wreck the terminal.
             self._urwid_loop.stop()
+            loop.close()
 
     def get_conv_widget(self, conv_id):
         """Return an existing or new ConversationWidget."""
@@ -101,11 +102,11 @@ class ChatUI(object):
         # switch to new or existing tab for the conversation
         self.add_conversation_tab(conv_id, switch=True)
 
+    @asyncio.coroutine
     def _on_connect(self, initial_data):
         """Handle connecting for the first time."""
-        self._user_list = hangups.UserList(
-            self._client, initial_data.self_entity, initial_data.entities,
-            initial_data.conversation_participants
+        self._user_list = yield from hangups.build_user_list(
+            self._client, initial_data
         )
         self._conv_list = hangups.ConversationList(
             self._client, initial_data.conversation_states, self._user_list,
@@ -123,7 +124,14 @@ class ChatUI(object):
 
     def _on_event(self, conv_event):
         """Open conversation tab for new messages when they arrive."""
-        if isinstance(conv_event, hangups.ChatMessageEvent):
+        conv = self._conv_list.get(conv_event.conversation_id)
+        user = conv.get_user(conv_event.user_id)
+        add_tab = all((
+            isinstance(conv_event, hangups.ChatMessageEvent),
+            not user.is_self,
+            not conv.is_quiet,
+        ))
+        if add_tab:
             self.add_conversation_tab(conv_event.conversation_id)
 
     def _on_quit(self):
@@ -142,20 +150,63 @@ class LoadingWidget(urwid.WidgetWrap):
         ))
 
 
-class ConversationPickerWidget(urwid.WidgetWrap):
-    """Widget for picking a conversation."""
+class ConversationButton(urwid.WidgetWrap):
+    """Button that shows the name and unread message count of conversation."""
+
+    def __init__(self, conversation, on_press):
+        conversation.on_event.add_observer(self._on_event)
+        # Need to update on watermark notifications as well since no event is
+        # received when the user marks messages as read.
+        conversation.on_watermark_notification.add_observer(self._on_event)
+        self._conversation = conversation
+        self._button = urwid.Button(self._get_label(), on_press=on_press,
+                                    user_data=conversation.id_)
+        super().__init__(self._button)
+
+    def _get_label(self):
+        """Return the button's label generated from the conversation."""
+        return get_conv_name(self._conversation, show_unread=True)
+
+    def _on_event(self, _):
+        """Update the button's label when an event occurs."""
+        self._button.set_label(self._get_label())
+
+    @property
+    def last_modified(self):
+        """Last modified date of conversation, used for sorting."""
+        return self._conversation.last_modified
+
+
+class ConversationListWalker(urwid.SimpleFocusListWalker):
+    """ListWalker that maintains a list of ConversationButtons.
+
+    ConversationButtons are kept in order of last modified.
+    """
 
     def __init__(self, conversation_list, on_select):
-        # Build buttons for selecting conversations ordered by most recently
-        # modified first.
+        self._conversation_list = conversation_list
+        self._conversation_list.on_event.add_observer(self._on_event)
+        self._on_press = lambda button, conv_id: on_select(conv_id)
         convs = sorted(conversation_list.get_all(), reverse=True,
                        key=lambda c: c.last_modified)
-        on_press = lambda button, conv_id: on_select(conv_id)
-        buttons = [urwid.Button(get_conv_name(conv, show_unread=True),
-                                on_press=on_press, user_data=conv.id_)
+        buttons = [ConversationButton(conv, on_press=self._on_press)
                    for conv in convs]
-        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(buttons))
-        widget = urwid.Padding(listbox, left=2, right=2)
+        super().__init__(buttons)
+
+    def _on_event(self, _):
+        """Re-order the conversations when an event occurs."""
+        # TODO: handle adding new conversations
+        self.sort(key=lambda conv_button: conv_button.last_modified,
+                  reverse=True)
+
+
+class ConversationPickerWidget(urwid.WidgetWrap):
+    """ListBox widget for picking a conversation from a list."""
+
+    def __init__(self, conversation_list, on_select):
+        list_walker = ConversationListWalker(conversation_list, on_select)
+        list_box = urwid.ListBox(list_walker)
+        widget = urwid.Padding(list_box, left=2, right=2)
         super().__init__(widget)
 
 
@@ -539,11 +590,18 @@ class ConversationWidget(urwid.WidgetWrap):
         # Ignore if the user hasn't typed a message.
         if len(text) == 0:
             return
+        elif text.startswith('/image') and len(text.split(' ')) == 2:
+            # Temporary UI for testing image uploads
+            filename = text.split(' ')[1]
+            image_file = open(filename, 'rb')
+            text = ''
+        else:
+            image_file = None
         # XXX: Exception handling here is still a bit broken. Uncaught
         # exceptions in _on_message_sent will only be logged.
         segments = hangups.ChatMessageSegment.from_str(text)
         asyncio.async(
-            self._conversation.send_message(segments)
+            self._conversation.send_message(segments, image_file=image_file)
         ).add_done_callback(self._on_message_sent)
 
     def _on_message_sent(self, future):
